@@ -6,11 +6,11 @@ import time
 from libs import aws
 from datetime import datetime
 configs = {
-    'bootstrap_servers': 'localhost:9092',  # Replace with your Kafka broker(s)
-    'group_id': 'kafka-pull-test',  # Replace with your consumer group ID
-    'auto_offset_reset': 'latest',  # Start consuming from the beginning of the topic
-    'enable_auto_commit': True, # Enable automatic offset commits
-    'value_deserializer': lambda x: json.loads(x.decode('utf-8'))  # Deserialize JSON messages
+    'bootstrap_servers': 'localhost:9092',
+    'group_id': 'kafka-pull-test',
+    'auto_offset_reset': 'latest',
+    'enable_auto_commit': True,
+    'value_deserializer': lambda x: json.loads(x.decode('utf-8'))
 }
 
 consumer = KafkaConsumer('backblaze_smart',**configs)
