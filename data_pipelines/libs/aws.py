@@ -1,14 +1,6 @@
 import boto3
 import json
 
-def boto3_s3_client():
-    s3 = boto3.client(
-        's3',
-        aws_access_key_id='', 
-        aws_secret_access_key=''
-    )
-    return s3
-
 def read_json_file_from_s3(bucket, key):
     s3 = boto3.client('s3')
     data = ''
