@@ -3,8 +3,8 @@ from pyspark.sql.functions import lit
 from datetime import datetime
 import boto3
 import json
-from schemas.kafka_lenses_backblaze_smart import custom_schema
-from libs import aws
+from data_pipelines.schemas.kafka_lenses_backblaze_smart import custom_schema
+from data_pipelines.libs import aws
 
 spark = (
     SparkSession.builder
