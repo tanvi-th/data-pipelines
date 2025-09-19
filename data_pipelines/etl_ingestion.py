@@ -13,14 +13,6 @@ spark = SparkSession.builder \
     .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
     .getOrCreate()
 
-# .config("spark.hadoop.fs.s3a.aws.credentials.provider", "com.amazonaws.auth.profile.ProfileCredentialsProvider") \
-# .config("spark.hadoop.fs.s3a.aws.profile", "local_dev") \
-
-spark_conf = spark.sparkContext.getConf().getAll()
-
-# Print the configuration
-for key, value in spark_conf:
-    print(f"-------------------------------{key}: {value}")
 
 bucket = "kafka-lenses-raw"
 prefix = "backblaze_smart"

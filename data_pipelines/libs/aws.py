@@ -10,5 +10,4 @@ def read_json_file_from_s3(bucket, key):
         data = json.loads(content)
     except Exception as e:
         print(f"Error reading JSON from S3: {e}")
-        # print(s3.)
     return data
