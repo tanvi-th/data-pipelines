@@ -3,18 +3,24 @@ from pyspark.sql.functions import lit
 from datetime import datetime
 import boto3
 import json
-from data_pipelines.schemas.kafka_lenses_backblaze_smart import custom_schema
-from data_pipelines.libs import aws
+from schemas.kafka_lenses_backblaze_smart import custom_schema
+from libs import aws
 
-spark = (
-    SparkSession.builder
-    .appName("ETL Ingestion")
-    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
-    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-    .config("spark.hadoop.fs.s3a.aws.credentials.provider", "com.amazonaws.auth.profile.ProfileCredentialsProvider")
-    .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
+spark = SparkSession.builder \
+    .appName("ETL Ingestion") \
+    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+    .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
     .getOrCreate()
-)
+
+# .config("spark.hadoop.fs.s3a.aws.credentials.provider", "com.amazonaws.auth.profile.ProfileCredentialsProvider") \
+# .config("spark.hadoop.fs.s3a.aws.profile", "local_dev") \
+
+spark_conf = spark.sparkContext.getConf().getAll()
+
+# Print the configuration
+for key, value in spark_conf:
+    print(f"-------------------------------{key}: {value}")
 
 bucket = "kafka-lenses-raw"
 prefix = "backblaze_smart"
