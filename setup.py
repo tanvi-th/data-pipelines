@@ -7,6 +7,10 @@ setup(
     install_requires=[
         "pyspark",
         "boto3",
-        "kafka-python"
+        "fastavro",
+        "confluent-kafka[avro]",
+        "orjson",
+        "requests",
+        "avro-python3"
     ]
 )
