@@ -1,7 +1,7 @@
 
 from pyspark.sql.types import StructType, StructField, StringType, LongType
 
-custom_schema = StructType([
+schema = StructType([
     StructField("capacity_bytes", LongType(), True),
     StructField("date", StringType(), True),
     StructField("failure", LongType(), True),

@@ -1,5 +1,5 @@
-from kafka import KafkaConsumer
 import json
+import requests
 from io import BytesIO
 import time
 from datetime import datetime
@@ -7,6 +7,7 @@ import logging
 import boto3
 import argparse
 from confluent_kafka import Consumer
+import fastavro
 from confluent_kafka.avro import AvroConsumer
 from confluent_kafka.avro.serializer import SerializerError
 
@@ -24,142 +25,118 @@ DEFAULTS = {
     "schema_file": None
 }
 
-# from pprint import pprint
 
-# def debug_kafka_consumer(consumer):
-#     print("\n--- KafkaConsumer Debug Info ---")
-#     try:
-#         print("Bootstrap servers:", consumer.config.get("bootstrap_servers"))
-#         print("Group ID:", consumer.config.get("group_id"))
-#         print("Client ID:", consumer.config.get("client_id"))
-#         print("Subscribed topics:", consumer.subscription())
-#         print("Assigned partitions:", consumer.assignment())
-#         print("Available topics:", consumer.topics())
-        
-#         if consumer.assignment():
-#             offsets = {tp: consumer.position(tp) for tp in consumer.assignment()}
-#             print("Current offsets:", offsets)
-        
-#         print("\nFull __dict__ dump:")
-#         pprint(consumer.__dict__)
-#     except Exception as e:
-#         print("Error while debugging consumer:", e)
-#     print("--- End Debug ---\n")
+def _base_consumer_config(config: dict) -> dict:
+    """Build common Kafka consumer configuration."""
+    return {
+        'bootstrap.servers': config["bootstrap_servers"],
+        'group.id': config["group_id"],
+        'auto.offset.reset': config.get("auto_offset_reset", "earliest"),
+        'enable.auto.commit': config.get("enable_auto_commit", False)
+    }
 
-# def avro_deserializer(schema):
-#     """Return a deserializer function for Avro bytes."""
-#     __schema = avro.schema.parse(schema)
-#     reader = avro.io.DatumReader(__schema)
 
-#     def _deserialize(message_bytes):
-#         bytes_reader = BytesIO(message_bytes)
-#         decoder = avro.io.BinaryDecoder(bytes_reader)
-#         record = reader.read(decoder)
-#         if not isinstance(record, dict):
-#             raise ValueError(f"Expected dict from Avro, got {type(record)}")
-#         return record
-#     return _deserialize
-
-def get_consumer(config) -> KafkaConsumer:
-    """Kafka consumer factory depending on format."""
-    if config["format"] == "json":
-        consumer = Consumer(
-            bootstrap_servers=config["bootstrap_servers"],
-            group_id=config["group_id"],
-            auto_offset_reset=config["auto_offset_reset"],
-            enable_auto_commit=config["enable_auto_commit"]
-        )
-        consumer.subscribe(config['topic'])
-        # deserializer = lambda x: json.loads(x.decode("utf-8"))
-        return consumer
-    elif config["format"] == "avro":
-        if not config["schema_file"]:
-            raise ValueError("Avro format requires 'schema_file' path.")
-        elif config["schema_file"].startswith("http"):
-            import requests
-            resp = requests.get(f"{config['schema_file']}/subjects/{config['topic']}-value/versions/latest")
-            resp.raise_for_status()
-            schema = resp.json()['schema']
-            print("fetching from http schema location",resp.json())
-        else:
-            with open(config["schema_file"], "r") as f:
-                schema = f.read()
-        deserializer = avro_deserializer(schema)
-    else:
-        raise ValueError(f"Unsupported format: {config['format']}")
-    return AvroConsumer(
-        bootstrap_servers=config["bootstrap_servers"],
-        group_id=config["group_id"],
-        auto_offset_reset=config["auto_offset_reset"],
-        enable_auto_commit=config["enable_auto_commit"],
-        value_deserializer=deserializer,
-    )
-
-def upload_to_s3(data: list, *, bucket: str, prefix: str, file_name_prefix: str) -> None:
+def upload_to_s3(data: list, *, bucket: str, prefix: str, file_name_prefix: str, format:str, avro_schema: dict = None) -> None:
+    """Upload data to S3 in specified format."""
     s3 = boto3.client("s3")
-    json_data = json.dumps(data, indent=2)
-    bytes_data = BytesIO(json_data.encode('utf-8'))
     end_time = datetime.now()
     year, month, day = end_time.strftime("%Y"), end_time.strftime("%m"), end_time.strftime("%d")
     prefix = f'{prefix}/date={year}-{month}-{day}/'
-    file_name = f'{file_name_prefix}_{year}-{month}-{day}_{end_time.hour}-{end_time.minute}-{end_time.second}.json'
-    s3.upload_fileobj(
-        bytes_data,
-        Bucket = bucket,
-        Key=prefix+file_name
-    )
+    file_name = f'{file_name_prefix}_{year}-{month}-{day}_{end_time.hour}-{end_time.minute}-{end_time.second}.{format}'
+    # serialize based on format
+    if format == "json":
+        payload = json.dumps(data, indent=2).encode("utf-8")
+        s3.upload_fileobj(BytesIO(payload), bucket, prefix + file_name)
+    elif format == "avro":
+        if not avro_schema:
+            raise ValueError("Avro schema is required for Avro serialization")
+        buf = BytesIO()
+        fastavro.writer(buf, avro_schema, data)
+        buf.seek(0)
+        s3.upload_fileobj(buf, bucket, prefix + file_name)
+    else:
+        raise ValueError(f"Unsupported format: {format}")
+    
+
+def get_consumer(config: dict):
+    """
+    Return a Kafka consumer based on format.
+
+    Args:
+        config (dict): base configuration
+
+    Returns:
+        AvroConsumer or Consumer
+    """
+    consumer_conf = _base_consumer_config(config)
+
+    if config["format"] == "avro":
+        consumer_conf["schema.registry.url"] = config["schema_file"]
+        consumer = AvroConsumer(consumer_conf)
+    elif config["format"] == "json":
+        consumer = Consumer(consumer_conf)
+    else:
+        raise ValueError(f"Unsupported consumer format: {format}")
+
+    topics = config["topic"] if isinstance(config["topic"], list) else [config["topic"]]
+    consumer.subscribe(topics)
+    return consumer
+
+
+def consume_messages(consumer, duration: int, fmt: str) -> list:
+    """Consume messages for given duration (seconds) and return list of values."""
+    data = []
+    start_time = time.time()
+    while True:
+        msg = consumer.poll(1.0)
+        if time.time() - start_time > duration:
+            break
+        if msg is None:
+            continue
+        if msg.error():
+            print(f"Consumer error: {msg.error()}")
+            continue        
+        try:
+            if fmt == "json":
+                # Kafka Consumer gives raw bytes
+                decoded = msg.value().decode("utf-8")
+                data.append(json.loads(decoded))  # → dict/list
+            elif fmt == "avro":
+                # AvroConsumer already deserializes using schema registry
+                data.append(msg.value())  # → dict
+            else:
+                raise ValueError(f"Unsupported format: {fmt}")
+        except Exception as e:
+            print(f"Failed to process message: {e}")
+
+    return data
+
+def get_avro_schema(schema_registry: str, topic: str):
+    resp = requests.get(f"{schema_registry}/subjects/{topic}-value/versions/latest")
+    resp.raise_for_status()
+    schema = resp.json()['schema']
+    avro_schema = json.loads(schema)
+    return avro_schema
     
 
 def main(**kwargs) -> None:
+    """Run Kafka consumer job and upload consumed data to S3."""
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
     config = {**DEFAULTS, **kwargs}
-    
-    
-    for attempt in range(5):
-        try:
-            print("--------------------------------TRYING CONSUMER")
-            consumer = get_consumer(config)
-            # debug_kafka_consumer(consumer)
-            break
-        except KafkaError as e:
-            logger.warning(f"Kafka not ready yet ({attempt+1}/10): {e}")
-            time.sleep(10)
-    else:
-        raise RuntimeError("Failed to connect to Kafka after retries")
-    
     try:
         logger.info("Starting consumer loop...")
-        data = []
-        start_time = time.time()
-        print("-----------------------------CONSUMER:", consumer.assignment())
-        print("-----------------------------Partitions for topic:", consumer.partitions_for_topic(config['topic']))
-
-
-        # consumer.subscribe([config["topic"]])
-        # Wait until partitions are assigned
-        timeout = 50  # seconds
-        start = time.time()
-        while not consumer.assignment():
-            if time.time() - start > timeout:
-                print("Partitions were not assigned in time")
-                break
-            time.sleep(5)
-            print("-----------------------------SLEEPING")
-            
-        for message in consumer:
-            print("-----------------------------HERE")
-            print(message.value)
-            data.append(message.value)
-            if time.time() - start_time > config["max_duration"]:
-                break   
-        logger.info(f"CONSUMED MESSAGES FOR {config['max_duration']} SECONDS")
+        consumer = get_consumer(config)
+        data = consume_messages(consumer, config["max_duration"], config["format"])
+        schema = get_avro_schema(config["schema_file"], config["topic"]) if config["format"] == 'avro' else None
         if data:
             upload_to_s3(
                 bucket=config["bucket"],
                 data=data,
                 prefix=config["prefix"],
-                file_name_prefix=config["file_name_prefix"]
+                file_name_prefix=config["file_name_prefix"],
+                format=config['format'],
+                avro_schema=schema
             )
             logger.info(f"{config['file_name_prefix']} HAS BEEN UPLOADED TO S3 LOCATION - {config['bucket']}/{config['prefix']}")
         else:
@@ -169,6 +146,8 @@ def main(**kwargs) -> None:
         logger.warning("Consumer stopped by user.")
     except Exception as e:
         logger.error(f"Error occurred: {e}", exc_info=True)
+    except SerializerError as e:
+        print(f"Message deserialization failed: {e}")
     finally:
         # Close the consumer
         consumer.close()
