@@ -9,6 +9,21 @@ import logging
 from pyspark.sql.functions import current_timestamp
 import importlib.util
 import os
+from schemas.kafka_lenses_backblaze_smart import custom_schema
+from libs import aws
+
+spark = SparkSession.builder \
+    .appName("ETL Ingestion") \
+    .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
+    .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+    .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+    .getOrCreate()
+
+
+bucket = "kafka-lenses-raw"
+prefix = "backblaze_smart"
+manifest_bucket="dwh-manifests"
+manifest_key="bronze/kafka-lenses/backblaze_smart.json"
 
 
 logging.basicConfig(level=logging.INFO)
